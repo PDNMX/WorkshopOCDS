@@ -1,0 +1,538 @@
+---
+title: "Banderas rojas en compras públicas en México"
+author: "Fernanda Mora"
+date: "June 10, 2019"
+output: html_document
+---
+</br>
+<img src="bandera-mexico.png" width="200" height="50" hspace="100"/>   <img src="OCP_logo.png" width="300" height="100"/>
+
+</br>
+
+##Contenido
+
+0. Lectura y limpieza de datos
+1. Primer bandera roja: poco tiempo para presentar ofertas
+2. Segunda bandera roja: pocos competidores en licitaciones
+3. Tercer bandera roja: pocos procesos competitivos
+4. Cuarta bandera roja: diferencia alta monto adjudicación vs monto contratado
+5. Quinta bandera roja: alto númeo de enmiendas a los contratos
+6. Conclusiones
+
+###0. Lectura y limpieza de datos
+Importamos las librerías y ponemos espacio de trabajo.
+```{r}
+library(readxl)
+library(rio)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(table1)
+library(lemon)
+knit_print.data.frame <- lemon_print
+setwd("/home/mora/red_flags")
+```
+
+Ahora leemos los datos. Los guardamos en una lista en donde cada componente de la lista es una hoja de Excel. Leer de esta manera nos permite hacerlo una sola vez para todo el archivo completo, en vez de una vez por cada hoja de Excel. Al final tenemos 28 hojas de excel en una sola lista e iremos leyendo las que necesitemos.
+
+Otra ventaja de hacerlo así es que es más sencillo jalar cada archivo, pues en vez de poner un nombre distinto para cada hoja, solamente se llama su posición en la lista principal.
+
+```{r}
+file.list <- list.files(pattern='*.xlsx')
+#df.list <- lapply(file.list, read_excel)
+#Listamos todas las hojas a importar
+str(import_list(file.list), 1)
+#lista de dataframes
+data_list <- import_list(file.list)
+```
+
+Las dimensiones de cada uno de las 28 hojas de Excel en número de filas y número de columnas:
+
+```{r}
+print(lapply(data_list, dim))
+```
+
+<br>
+
+###1. Primer bandera roja: poco tiempo para presentar ofertas
+
+> **Racional:** Un breve período de ofertas no permite a los oferentes preparar y presentar ofertas de alta calidad. Los licitantes que hayan sido "informados" sobre la oportunidad antes de la apertura pública pueden tener una ventaja injusta si se les da más tiempo para preparar las ofertas
+
+Esta bandera corresponde a la primer fase del proceso de contratación: **planeación**.
+
+  <img src="fases_contratación.png" alt="" width="700">
+  
+####Variables usadas
+tender/id <br>
+tender/procurementMethod <br>
+tender/tenderPeriod/startDate <br>
+tender/tenderPeriod/endDate
+
+<br>
+
+####Cálculo
+
+- Para cada licitación, si el tiempo para presentar ofertas es *bajo*, se prende la bandera roja para esa licitación.
+
+- Se usarán varios niveles de *bajo*, les llamaremos thresholds
+
+- Se calcula el número promedio de banderas rojas
+
+- Se calcula el número promedio de tiempo abierto
+
+<br>
+
+#### Datos
+La primer hoja de releases tiene las siguientes 34 variables:
+
+```{r}
+releases <- data_list[[1]]
+n_var <- names(releases)
+length(n_var)
+print(n_var)
+```
+
+Para la primer bandera, necesitamos:
+  - ID del concurso
+  - Procedimiento de contratación (sólo consideramos las abiertas, i.e. licitaciones)
+  - Fecha de inicio del concurso
+  - Fecha final del concurso
+
+La variable 'procurementMethod', tenderPeriod/startDate, tenderPeriod/endDate se están leyendo de tipo caracter. La pasamos 'procurementMethod' a categórica. tenderPeriod/startDate y tenderPeriod/endDate a tipo fecha.
+
+```{r}
+class(releases$`tender/procurementMethod`)
+str(releases$`tender/tenderPeriod/startDate`)
+str(releases$`tender/tenderPeriod/endDate`)
+releases$`tender/tenderPeriod/startDate` <- as.Date(releases$`tender/tenderPeriod/startDate`)
+releases$`tender/tenderPeriod/endDate` <- as.Date(releases$`tender/tenderPeriod/endDate`)
+releases$`tender/tenderPeriod/startDate` <- ymd(releases$`tender/tenderPeriod/startDate`)
+releases$`tender/tenderPeriod/endDate` <- ymd(releases$`tender/tenderPeriod/endDate`)
+```
+
+Tenemos 3 tipos de procurement method: direct, open y selective.
+
+```{r}
+releases$`tender/procurementMethod` <-factor(releases$`tender/procurementMethod`)
+levels(releases$`tender/procurementMethod`)
+```
+
+14 de los 500  registros son de tipo nulo, lo cual quiere decir que no se reportó la información. Vamos a excluir estos registros de este análisis.
+```{r}
+sum(is.na(releases$`tender/procurementMethod`))
+```
+
+También tenemos 14 proceso sin fecha de inicio y 421 sin fecha de término, lo cual va a reducir aún más nuestro conjunto a calcular.
+```{r}
+sum(is.na(releases$`tender/tenderPeriod/endDate`))
+sum(is.na(releases$`tender/tenderPeriod/startDate`))
+```
+
+
+Sacamos la fecha máxima y mínima del dataset.
+```{r}
+releases %>% 
+  # transform to date format with lubridate
+  mutate(`tender/tenderPeriod/endDate` = ymd(`tender/tenderPeriod/endDate`)) %>% 
+  summarise(min = min(`tender/tenderPeriod/endDate`, na.rm=TRUE),
+            max = max(`tender/tenderPeriod/endDate`, na.rm=TRUE))
+```
+
+<br>
+
+Calculamos una columna de las diferencias de inicio y cierre del tender. Tenemos 421 datos nulos. Es decir, 85% de los datos. Eso significa que sólo podemos calcular la bandera para el 15% de los datos.
+
+```{r}
+releases <- releases %>%
+            mutate(tenderdate.diff = `tender/tenderPeriod/endDate` - `tender/tenderPeriod/startDate` )
+sum(is.na(releases$tenderdate.diff))
+```
+
+
+<br>
+
+Graficamos las diferencias.
+```{r}
+releases$tenderdate.diff <- as.numeric(releases$tenderdate.diff)
+ggplot(data=releases, aes(x=tenderdate.diff)) + 
+  geom_histogram(breaks=seq(0, 50, by = 5), 
+                 col="#2A363B", 
+                 fill="#3cb1e6", 
+                 alpha = 0.6, na.rm=TRUE) + 
+  geom_vline(aes(xintercept=median(tenderdate.diff, na.rm=TRUE)),
+            color="#E84A5F", linetype="dashed", size=1) +
+  geom_text(aes(x=15, label="\nmediana = 15", y=5), colour="white",    angle=90) +
+  ggtitle("Histograma del tiempo que estuvo abierto el tender") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(x="Diferencia fecha inicio y fin del tender (días)", y="Frecuencia", caption = "[Basado en la muestra proporcionada por OCP: 15% de datos]", tag = "Gráfico 1", subtitle = "[Sin considerar procedimiento de contratación]") + 
+  xlim(c(5,50)) + 
+  ylim(c(0,25)) +
+  theme_bw() +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="bold.italic", size=13, hjust=0.5)) +
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="italic", size=10)) +
+  theme(plot.subtitle = element_text(color="#5d5b5c", size=9, hjust = 0.5), plot.tag = element_text(color="#3cb1e6", face="plain"), plot.caption = element_text(color="#5d5b5c", size=8))
+```
+
+<br>
+
+#####Resumen estadístico del tiempo del tender abierto (sin considerar procedimiento de contratación)
+
+Podemos observar que la mediana del tiempo que el tender estuvo abierto es 15, el mínimo de días fue de 6 y el máximo de 249.
+
+```{r}
+table1::label(releases$tenderdate.diff) <- "Tiempo tender abierto"
+table1::table1(~tenderdate.diff, data = releases)
+```
+
+<br>
+
+Si ahora consideramos el tipo de proceso de contratación.
+
+
+```{r}
+ggplot(releases, aes(x=`tender/procurementMethod`, y=tenderdate.diff, color=`tender/procurementMethod`)) +
+  geom_boxplot() +
+  labs(title="Tiempo que estuvo abierto el tender por tipo de proceso") +
+  labs(x="Tipo de proceso", y="Tiempo de tender abierto (días)", caption = "[Basado en la muestra proporcionada por OCP]", tag = "Gráfico 2", subtitle = "[Considerando todo tipo de proceso]")+
+  theme_bw() +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="bold.italic", size=13, hjust=0.5)) +
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="italic", size=9)) +
+  theme(plot.subtitle = element_text(color="#5d5b5c", size=9, hjust = 0.5), plot.tag = element_text(color="#3cb1e6", face="plain"), plot.caption = element_text(color="#5d5b5c", size=8), legend.position="none")
+```
+
+####Cálculo de la bandera 1
+
+Tomamos los datos que necesitamos:
+```{r}
+#Primero llenamos con NA lo que no se puede calcular
+#Lo que no tenga valores en la diferencias
+releases$bandera1[is.na(releases$tenderdate.diff)] <- "NA"
+#Lo que no sea open
+releases$bandera1[!(releases$`tender/procurementMethod`=="open")] <- "NA"
+#sum(is.na(releases$bandera1))
+#str(releases$bandera1)
+#Ahora probamos con distintos thresholds
+#releases.diff <- releases[!is.na(releases$tenderdate.diff), ]
+```
+
+<br>
+
+Ahora probaremos con varios niveles de threshold, pues de eso dependerá el valor de la bandera. Primero probamos con el threshold de 4, el cual nos comentaron en el taller, es el threshold usado en Estados Unidos.
+
+```{r}
+t1 <- releases %>%
+  filter(!is.na(releases$tenderdate.diff)) %>%
+  mutate(bandera1=ifelse(`tender/procurementMethod`=="open" & tenderdate.diff<4, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera1 = mean(bandera1), sd_bandera1 = sd(bandera1))
+print(t1)
+
+t2 <- releases %>%
+  filter(!is.na(releases$tenderdate.diff)) %>%
+  mutate(bandera1=ifelse(`tender/procurementMethod`=="open" & tenderdate.diff<10, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera1 = mean(bandera1), sd_bandera1 = sd(bandera1))
+print(t2)
+
+t3 <- releases %>%
+  filter(!is.na(releases$tenderdate.diff)) %>%
+  mutate(bandera1=ifelse(`tender/procurementMethod`=="open" & tenderdate.diff<15, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera1 = mean(bandera1), sd_bandera1 = sd(bandera1))
+print(t3)
+
+t4 <- releases %>%
+  filter(!is.na(releases$tenderdate.diff)) %>%
+  mutate(bandera1=ifelse(`tender/procurementMethod`=="open" & tenderdate.diff<20, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera1 = mean(bandera1), sd_bandera1 = sd(bandera1))
+print(t4)
+
+t5 <- releases %>%
+  filter(!is.na(releases$tenderdate.diff)) %>%
+  mutate(bandera1=ifelse(`tender/procurementMethod`=="open" & tenderdate.diff<25, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera1 = mean(bandera1), sd_bandera1 = sd(bandera1))
+print(t5)
+```
+
+<br>
+
+Podemos observar que el valor final de la bandera depende mucho del threshold que tomemos. Por ejemplo, si tomamos un threshold de "menos de 10 días" y "menos de 4 días", el % de banderas rojas tipo 1 es de 0%. Por otro lado, si tomamos "menos de 20 días" y "menos de 25 días", el % de banderas rojas tipo 1 es de 35%-44%.
+
+```{r}
+results1 <- c(round(t1$promedio_bandera1,5)*100, round(t2$promedio_bandera1,5)*100, round(t3$promedio_bandera1, 5)*100, round(t4$promedio_bandera1,5)*100, round(t5$promedio_bandera1, 5)*100)
+results1 <- as.data.frame(results1)
+print(results1)
+```
+
+<br>
+
+```{r}
+ggplot(data=results1, aes(x=c("Menos de 4", "Menos de 10", "Menos de 15", "Menos de 20", "Menos de 25"), y=results1)) + 
+  geom_point(colour = "#3cb1e6", size = 3)+ 
+  geom_text(aes(label=results1),hjust=1, vjust=1, color="gray" ) +
+  labs(title="% de banderas rojas tipo 1 según threshold seleccionado") +
+  labs(x="Días que el tender está abierto", y="% de banderas rojas tipo 1", caption = "[Basado en la muestra proporcionada por OCP]", tag = "Gráfico 3", subtitle = "[Considerando sólo licitaciones]")+
+  theme_bw() +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="bold.italic", size=13, hjust=0.5)) +
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="italic", size=9)) +
+  theme(plot.subtitle = element_text(color="#5d5b5c", size=9, hjust = 0.5), plot.tag = element_text(color="#3cb1e6", face="plain"), plot.caption = element_text(color="#5d5b5c", size=8))
+```
+
+<br>
+
+###2. Segunda bandera roja: pocos competidores en licitaciones
+
+Otra bandera roja propuesta por OCP es tener un número bajo de oferentes en las licitaciones (i.e. procedimientos de contratación abiertos).
+
+> **Racional:** Un número promedio de oferentes por licitación más alto puede indicar que los procesos suelen ser más competitivos, tanto en la forma de proceso (abierta en lugar de cerrada) como en el nivel de competencia dentro de cada proceso. Puede indicar mayor competencia y confianza en el sistema de contratación.
+
+Esta bandera corresponde a la primer fase del proceso de contratación: **planeación**.
+
+  <img src="fases_contratación.png" alt="" width="700">
+<br>
+
+####Variables usadas
+- tender/id
+- tender/procurementMethod
+- tender/numberOfTenderers
+
+####Cálculo
+
+- Para cada licitación, si el número de oferentes es **bajo**, se prende la bandera roja para esa licitación.
+- Se usarán varios niveles de **bajo**
+- Se calcula el número promedio de banderas rojas
+- Se calcula el número promedio de oferentes
+
+
+####Datos
+
+Primero obtendremos los datos requeridos en el análisis.
+Sólo consideraremos las licitaciones de tipo abierto en la variable "Procurement Method". Esto nos da únicamente 38 contrataciones públicas del total de 500.
+
+```{r}
+df2 <- releases %>% select(`tender/id`, `tender/procurementMethod`, `tender/numberOfTenderers`) %>%
+                    filter(`tender/procurementMethod`=="open") %>%
+                    summarise (count = n())
+print(df2)
+```
+
+<br>
+
+Posteriormente, obtenemos que si además consideramos la variable de _numberOfTenderers_ obtenemos únicamente 27 contrataciones públicas que cuentan con ambas variables.
+
+```{r}
+df22_n <- releases %>% select(`tender/id`, `tender/procurementMethod`, `tender/numberOfTenderers`) %>%
+                    filter(`tender/procurementMethod`=="open", !is.na(`tender/numberOfTenderers`)) %>%
+                    summarise (count = n())
+print(df22_n)
+
+df22 <- releases %>% select(`tender/id`, `tender/procurementMethod`, `tender/numberOfTenderers`) %>%
+                    filter(`tender/procurementMethod`=="open", !is.na(`tender/numberOfTenderers`))
+print(df2)
+```
+
+
+<br>
+
+#####Resumen estadístico del número de participantes en las licitaciones
+
+Podemos observar que la mediana del tiempo que el tender estuvo abierto es 15, el mínimo de días fue de 6 y el máximo de 249.
+
+```{r}
+table1::label(releases$`tender/numberOfTenderers`) <- "Número de oferentes"
+table1::table1(~`tender/numberOfTenderers`, data = releases)
+```
+
+<br>
+
+Si ahora observamos el número de oferentes por tipo de contratación, podemos ver que en promedio las licitaciones (procesos de contratación abiertos) sí tiene mayor número de oferentes que los procesos directos y los selectos.
+
+```{r}
+ggplot(releases, aes(x=`tender/procurementMethod`, y=`tender/numberOfTenderers`, color=`tender/procurementMethod`)) +
+  geom_boxplot() +
+  labs(title="Número de oferentes por tipo de proceso") +
+  labs(x="Tipo de proceso", y="Número de oferentes", caption = "[Basado en la muestra proporcionada por OCP]", tag = "Gráfico 4", subtitle = "[Considerando todo tipo de proceso]")+
+  theme_bw() +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="bold.italic", size=13, hjust=0.5)) +
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="italic", size=9)) +
+  theme(plot.subtitle = element_text(color="#5d5b5c", size=9, hjust = 0.5), plot.tag = element_text(color="#3cb1e6", face="plain"), plot.caption = element_text(color="#5d5b5c", size=8), legend.position="none")
+```
+
+####Cálculo de la bandera 2
+
+Si consideramos un umbral muestral de un oferente por licitación, tenemos que el 15% de los contratos tiene bandera roja.
+
+```{r}
+t1 <- df22 %>%
+  mutate(bandera2=ifelse(`tender/procurementMethod`=="open" & `tender/numberOfTenderers`<2, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera2 = mean(bandera2), sd_bandera2 = sd(bandera2))
+print(t1)
+```
+
+Si consideramos un umbral muestral de menos de 3 oferentes por licitación, tenemos que el 37% de los contratos tiene bandera roja.
+
+```{r}
+t2 <- df22 %>%
+  mutate(bandera2=ifelse(`tender/procurementMethod`=="open" & `tender/numberOfTenderers`<3, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera2 = mean(bandera2), sd_bandera2 = sd(bandera2))
+print(t2)
+```
+
+Si ahora consideramos un umbral de menos de 4, entonces el 44% de las licitaciones tienen bandera roja.
+
+```{r}
+t3 <- df22 %>%
+  mutate(bandera2=ifelse(`tender/procurementMethod`=="open" & `tender/numberOfTenderers`<4, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera2 = mean(bandera2), sd_bandera2 = sd(bandera2))
+print(t3)
+```
+
+Si ahora consideramos un umbral de menos de 5, tenemos que 48% de las licitaciones tienen bandera roja.
+```{r}
+t4 <- df22 %>%
+  mutate(bandera2=ifelse(`tender/procurementMethod`=="open" & `tender/numberOfTenderers`<5, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera2 = mean(bandera2), sd_bandera2 = sd(bandera2))
+print(t4)
+```
+
+Si finalmente tomamos un umbral de 5 oferentes, tenemos que 55% de los proceso de contratación tienen bandera roja.
+
+```{r}
+t5 <- df22 %>%
+  mutate(bandera2=ifelse(`tender/procurementMethod`=="open" & `tender/numberOfTenderers`<6, 1, 0)) %>%
+  summarize(n = n(), promedio_bandera2 = mean(bandera2), sd_bandera2 = sd(bandera2))
+print(t5)
+```
+
+
+La tabla de resultados de banderas rojas es la siguiente:
+
+```{r, render=lemon_print}
+results2 <- c(round(t1$promedio_bandera2,5)*100, round(t2$promedio_bandera2,5)*100, round(t3$promedio_bandera2, 5)*100, round(t4$promedio_bandera2,5)*100, round(t5$promedio_bandera2, 5)*100)
+results2 <- as.data.frame(results2)
+print(results2)
+```
+
+Como se puede observar en el gráfico, a medida que aumentamos el número de oferentes, el porcentaje de banderas rojas sube de manera considerable, llegando a tener más del 55% de banderas rojas cuando se consideran cinco o menos oferentes.
+
+```{r}
+ggplot(data=results2, aes(x=c("Un oferente", "Dos o menos", "Tres o menos", "Cuatro o menos", "Cinco o menos"), y=results2)) + 
+  geom_point(colour = "#3cb1e6", size = 3)+ 
+  geom_text(aes(label=results2),hjust=1, vjust=1, color="gray" ) +
+  labs(title="% de banderas rojas tipo 2 según threshold seleccionado") +
+  labs(x="Número de oferentes", y="% de banderas rojas tipo 2", caption = "[Basado en la muestra proporcionada por OCP]", tag = "Gráfico 5", subtitle = "[Considerando sólo licitaciones]")+
+  theme_bw() +
+  theme(plot.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="bold.italic", size=13, hjust=0.5)) +
+  theme(axis.title = element_text(family = "Trebuchet MS", color="#5d5b5c", face="italic", size=9)) +
+  theme(plot.subtitle = element_text(color="#5d5b5c", size=9, hjust = 0.5), plot.tag = element_text(color="#3cb1e6", face="plain"), plot.caption = element_text(color="#5d5b5c", size=8))
+```
+
+
+###3. Tercer bandera roja: pocos procesos competitivos
+
+Otra bandera roja propuesta por OCP es tener un bajo porcentaje de licitaciones adjudicadas mediante procesos competitivos.
+
+> Un mayor porcentaje total de ofertas adjudicadas a través de procesos competitivos puede indicar una mayor apertura en compra pública. El uso de procedimientos competitivos puede permitir que los licitantes potenciales tengan mayor acceso a los procesos de contratación pública y, por lo tanto, puede resultar en una mayor competencia der mercado
+
+Esta bandera corresponde a la primer fase del proceso de contratación: **planeación**.
+
+  <img src="fases_contratación.png" alt="" width="700">
+
+####Variables usadas
+tender/id;
+tender/procurementMethod;
+tender/value/amount;
+awards/status
+
+<br>
+
+####Cálculo
+
+- Procesos adjudicados por métodos competitivos / todos los procesos
+- OCP sugiere que al menos 50% de los procesos totales  sean competitivos
+
+<br>
+
+#### Datos
+
+Los datos son todas los contrataciones, sin considerar las que no tienen  tipo de contratación, es decir, las que tienen NA en `tender/procurementMethod`.
+
+<br>
+
+#### Cálculo de la bandera 3
+
+Obtenemos que solamente el 8% de los procesos de contratación son abiertos, que es alarmantemnete bajo si comparamos este umbral con el proporcionado por OCP que es 50%.
+
+```{r,render=lemon_print}
+df3 <- releases %>% select(`tender/id`, `tender/procurementMethod`) %>%
+                    filter(!is.na(`tender/procurementMethod`))%>%
+                    group_by(`tender/procurementMethod`) %>%
+                    summarise (total = n())%>%
+                    mutate(porcentaje = total / sum(total))
+df3
+```
+
+
+###4. Cuarta bandera roja: diferencia alta monto adjudicación vs monto contratado
+
+Otra bandera roja es tener una gran diferencia porcentual entre el monto de adjudicación del contrato y el monto final del contrato.
+
+> Una gran diferencia entre el precio de adjudicación y el precio final del contrato puede señalar acuerdos "a puerta cerrada" entre proveedores y compradores. En algunos casos, el licitante ofrece un precio artificialmente bajo para ganar un contrato y luego aumenta los precios a través de enmiendas del contrato durante su implementación. En otros, los licitantes ofertan precios justos, pero luego llegan acuerdos secretos con los compradores durante la fase de implementación, a veces a cambio de "coimas". Esto también puede indicar una mala planificación
+
+Esta bandera corresponde a la primer fase del proceso de contratación: **planeación**.
+
+  <img src="fases_contratación.png" alt="" width="700">
+
+####Variables usadas
+
+awards/id <br>
+awards/value/amount <br>
+contract/id <br>
+contracts/value/amount
+
+<br>
+
+####Cálculo
+
+- (Monto de contrato final - monto de adjudicación) / (monto de adjudicación)
+- OCP sugiere sugiere que no haya una diferencia entre monto de contrato final y monto de adjudicación de más de 30%. En otro caso, se pone una bandera roja en el contrato
+- Probaremos con este valor y otros
+
+<br>
+
+#### Datos
+
+Los datos son todas los contrataciones, sin considerar las que no tienen  tipo de contratación, es decir, las que tienen NA en `tender/procurementMethod`.
+
+Hay que tomar los datos de la hoja de "awards"
+
+```{r}
+awards <- data_list[[5]]
+n2_var <- names(awards)
+length(n2_var)
+print(n2_var)
+
+contracts <- data_list[[16]]
+n3_var <- names(contracts)
+length(n3_var)
+print(n3_var)
+
+```
+
+#### Cálculo de la bandera 4
+
+```{r}
+#df4 <- awards %>% select(`awards/0/id`, `contract/id`, `awards/value/amount`, `contracts/value/amount`) %>%
+#                    filter(!is.na(`awards/value/amount`), #!is.na(`contracts/value/amount`)) %>%
+#                    mutate(bandera4 = ifelse(`tender/procurementMethod`=="open" & tenderdate.diff<10, 1, 0)) %>%
+#  summarize(n = n(), promedio_bandera4 = mean(bandera4), sd_bandera4 = sd(bandera4))
+  
+#df4
+```
+
+###5. Quinta bandera roja: alto númeo de enmiendas a los contratos
+```{r}
+
+```
+
+###6. Conclusiones
+```{r}
+
+```

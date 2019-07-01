@@ -1,0 +1,45 @@
+---
+title: "Red flags en México"
+author: "Mexico"
+date: "June 5, 2019"
+output: html_document
+---
+
+library('tidyverse')
+
+##Contenido
+1. Limpieza
+2. Cálculo
+
+
+Primero leemos los datos.
+
+```{r, echo=FALSE}
+library(xlsx)
+a1=read.xlsx("mexico_info.xlsx", sheetName = "releases")
+```
+
+Convertimos a fechas las columnas
+```{r}
+as.Date(a1$tender.tenderPeriod.endDate)
+as.Date(a1$tender.tenderPeriod.startDate)
+str(a1$tender.tenderPeriod.startDate)
+str(a1$tender.tenderPeriod.endDate)
+```
+
+
+Creamos columna de diferencia de fechas y calculamos primer bandera. 
+
+```{r, echo=FALSE}
+a1$dif <- a1$tender.tenderPeriod.endDate-a1$tender.awardPeriod.startDate
+#Tenemos estos nas
+print(sum(is.na(a1$dif)))
+
+#calculamos la variable indicadora de la bandera 1
+a1$bandera1 <- ifelse(a1$tender.procurementMethod =="open" & a1$dif<10, 1, 0)
+mean(a1$bandera1, na.rm=TRUE)
+
+```
+
+
+
